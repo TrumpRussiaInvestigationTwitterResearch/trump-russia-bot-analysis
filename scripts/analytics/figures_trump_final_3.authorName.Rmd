@@ -1,0 +1,286 @@
+---
+title: "Trump Figures"
+output: html_notebook
+Note: Run sentiment analysis, and visualize the results by time and by the three clusters.
+Author: Thomas E. Keller
+---
+
+This notebook will generate the figures for "Our Great Paper Name." Also, generate a sample of tweets of hand text annotation.
+
+```{r prep}
+
+setwd('~/trump_rtweet')
+library(readr)
+library(rtweet)
+library(dplyr)
+df=read_rds("rtweet_finalish_051618.rds")
+dfn=read_csv('retweet_trump_top_001p_051718_loni.csv')
+dfn= dfn %>%
+  filter(modularity_class %in% c(19,13,12)) %>%
+  mutate(
+  class_label=case_when(modularity_class==19 ~ "cluster 1",
+                        modularity_class==13 ~ "cluster 2",
+                        modularity_class==12 ~ "cluster 3"
+    
+  )
+)
+
+#clusters 82,60,31 (blouvain)
+#clusters 4,2,3 (mod_label)
+
+
+dfn2 = dfn %>% 
+  select(Label,Degree,Eccentricity:class_label)
+
+df=distinct(df,status_id,.keep_all=TRUE)
+dfc=inner_join(df,dfn2,by=c("screen_name"="Label"))
+
+dfc %>% group_by(class_label) %>% summarise(n=n())
+
+```
+
+# sentiment-time
+
+```{r sent}
+df2=read_tsv("senti_input.csv",col_names =F)
+nrow(df2)
+dfc=bind_cols(dfc,df2[,2:3])
+names(dfc)[101]="class_label"
+names(dfc)[102]="spl"
+names(dfc)[104]="Positive"
+names(dfc)[105]="Negative"
+dfc=cbind(dfc,allt=sentout)
+dfc <- dfc %>% mutate(
+  csent = Positive + Negative,
+  asent = Positive - Negative
+)
+
+library(lubridate)
+
+dfc %>% modify_at(modularity_class,`19`="module 1",`13`="module 2",`12`="module 3")
+sdt=dfc
+sdt=dfc[,c(3,101,106:107)]
+
+#sdt=cbind(dfc,datetime=df$created_at)
+
+sdt$created_at=as_datetime(sdt$created_at)
+
+
+library(cowplot)
+sdt = sdt %>% rename(absolute_sent=asent,combined_sent=csent)
+p=sdt %>%
+  gather(key,value,-created_at,-class_label) %>%
+  ggplot(aes(created_at,value,colour=class_label)) +
+  facet_wrap(~ key,scales='free_y') +
+    geom_smooth()+theme(axis.text.x=element_text(angle=315,vjust=0.6))+
+  xlab("Date")+theme(legend.position="bottom")
+save_plot("sentiment_line_free_0608.png",p)
+
+p=sdt %>%
+  gather(key,value,-created_at,-class_label) %>%
+  ggplot(aes(created_at,value,colour=class_label)) +
+  facet_wrap(~ key) +
+    geom_smooth()+theme(axis.text.x=element_text(angle=315,vjust=0.6))+
+  xlab("Date")+theme(legend.position="bottom")
+save_plot("sentiment_line_nonfree_0608.png",p)
+
+
+dfc$account_created_at=as_datetime(dfc$account_created_at)
+accs<-dfc %>% group_by(screen_name) %>% summarise(acc_created=median(account_created_at),class_label=unique(class_label))
+
+p<-ggplot(aes(class_label,acc_created),data=accs)+geom_boxplot()
+p<-p+xlab("Network Cluster")+ylab('Account Creation Date')
+save_plot("acc_created_060818.png",p)
+
+#627721 total
+dfc %>% filter(is_retweet==0) %>% summarise(n=n()) # 170853
+dfc %>% filter(is_retweet==1) %>% summarise(n=n()) # 456868
+
+funx<-function(x){ifelse(is.na(x),0,length(x))}
+url_count<-sum(unlist(map(dfc$urls_expanded_url,funx))) #278157
+men_count<-sum(unlist(map(dfc$mentions_screen_name,funx))) #2805394
+
+dfc %>% group_by(class_label) %>% summarise(url_count = sum(unlist(map(urls_expanded_url,funx))))
+
+dfc %>% group_by(class_label) %>% summarise(mentions_screen_name = sum(unlist(map(mentions_screen_name,funx))))
+
+
+```
+
+
+## subsample for hand-labeling
+
+```{r subsample,eval=FALSE}
+
+
+library(dplyr)
+
+set.seed(42)
+dfc <- dfc %>% mutate(
+  csent = Positive + Negative,
+  asent = Positive - Negative
+)
+
+dfsub=dfc %>% group_by(modularity_class) %>% sample_n(200)
+dfsub=select(dfsub,allt,modularity_class,csent,asent)
+
+write_csv(dfsub,"tweets_200_permod051718.csv")
+
+dfh=read_csv("tweets_200_permod051718.csv")
+```
+
+
+```{r botcheck}
+library(botcheck)
+
+ckey=""
+csec=""
+acc_tok=""
+acc_sec=""
+
+library(httr)
+library(xml2) 
+library(RJSONIO)
+
+
+Mashape_key=""
+
+myapp = oauth_app("", key=ckey, secret=csec)
+sig = sign_oauth1.0(myapp, token=acc_tok, token_secret=acc_sec)
+botcheck('barackobama')
+scrns= dfc %>% group_by(class_label) %>% distinct(screen_name,.keep_all=TRUE)
+scrns[,c(4,101)]
+
+Mashape_key=""
+
+
+pcap=vector(mode="numeric",length=nrow(scrns))
+peng=vector(mode="numeric",length=nrow(scrns))
+pcont=vector(mode="numeric",length=nrow(scrns))
+pfrnd=vector(mode="numeric",length=nrow(scrns))
+pnet=vector(mode="numeric",length=nrow(scrns))
+psent=vector(mode="numeric",length=nrow(scrns))
+ptemp=vector(mode="numeric",length=nrow(scrns))
+puser=vector(mode="numeric",length=nrow(scrns))
+
+outdf=read_csv('botomer_061918.csv')
+pcap=outdf$cap
+peng=outdf$peng
+pcont=outdf$pcont
+pfrnd=outdf$pfrnd
+pnet=outdf$pnet
+psent=outdf$psent
+ptemp=outdf$ptemp
+puser=outdf$puser
+
+
+for(i in 1422:nrow(scrns)){
+  sname=scrns[i,4]
+  prob=botcheck2(sname)
+  Sys.sleep(5)
+  if(!("error" %in% names(prob))){
+    pcap[i]=prob$cap$english
+    peng[i]=prob$display_scores$english
+    pcont[i]=prob$display_scores$content
+    pfrnd[i]=prob$display_scores$friend
+    pnet[i]=prob$display_scores$network
+    psent[i]=prob$display_scores$sentiment
+    ptemp[i]=prob$display_scores$temporal
+    puser[i]=prob$display_scores$user
+    }
+  else{pcap[i]=NA
+       peng[i]=NA
+       pcont[i]=NA
+       pfrnd[i]=NA
+       pnet[i]=NA
+       psent[i]=NA
+       ptemp[i]=NA
+       puser[i]=NA
+  }
+  print(i)
+  #print(prob)
+  print(scrns[i,c(4,101)])
+  outdf=data.frame(screen_name=scrns[,4],cap=pcap,peng=peng,pcont=pcont,pfrnd=pfrnd,pnet=pnet,psent=psent,ptemp=ptemp,puser=puser)
+  write_csv(outdf,"botomer_061918.csv")
+}
+
+
+botcheck2<-function (user) 
+{
+    users_url = "https://api.twitter.com/1.1/users/show.json?screen_name="
+    statuses_url = "https://api.twitter.com/1.1/statuses/user_timeline.json?screen_name="
+    search_url = "https://api.twitter.com/1.1/search/tweets.json?q=%40"
+    opts = "&count=200"
+    userdata = GET(paste0(users_url, user, opts), sig)
+    tweets = GET(paste0(statuses_url, user, opts), sig)
+    mentions = GET(paste0(search_url, user, opts), sig)
+    body = list(timeline = content(tweets, type = "application/json"), 
+        mentions = content(mentions, type = "application/json"), 
+        user = content(userdata, type = "application/json"))
+    body_json = RJSONIO::toJSON(body, auto_unbox = T, pretty = T)
+    result = POST("https://osome-botometer.p.mashape.com/2/check_account", 
+        encode = "json", add_headers(`X-Mashape-Key` = Mashape_key), 
+        body = body_json)
+    result = content(result, as = "parsed")
+    return(result)
+}
+
+bdf=read_csv('botomer_061918.csv')
+bdf=bind_cols(bdf,scrns[,101])
+
+bdfc=bdf[complete.cases(bdf),]
+
+u75<-bdfc %>% filter(cap>=.75)
+library(WriteXLS)
+WriteXLS(u75,"top75_botomer_cap.xlsx")
+
+library(cowplot)
+p<-ggplot(aes(x=class_label,y=cap),data=bdfc)+geom_boxplot()+geom_jitter(alpha=0.3)+geom_violin()
+
+save_plot("botometer_062018.png",p)
+
+pairwise.t.test(bdfc$cap,bdfc$class_label)
+
+```
+
+# overlap with IRA troll accounts
+
+```{r-iratroll}
+library(purrr)
+files <- list.files(path = "~/russian-troll-tweets/", pattern = "*.csv")
+
+fdf <- files %>% 
+    map(function(x) {
+        read.csv(paste0("~/russian-troll-tweets/", x),stringsAsFactors=FALSE)
+    }) %>%
+reduce(rbind)
+
+tr_acc<-tolower(unique(fdf$author))
+allacc<-tolower(unique(c(dfc$screen_name,dfc$rtweet_screen_name)))
+hm=intersect(tolower(dfn$Label),tr_acc)
+hm2=intersect(allacc,tr_acc)
+hm2=data.frame(res=hm2)
+library(WriteXLS)
+red_acc = fdf %>% filter(author %in% hm) %>% select(author,account_type,new_june_2018,account_category) %>% distinct(.keep_all=T)
+WriteXLS(red_acc,"trump_IRA_troll_overlap_core_net.xls")
+
+red_acc2 = fdf %>% filter(author %in% hm2) %>% select(author,account_type,new_june_2018,account_category) %>% distinct(.keep_all=T)
+WriteXLS(red_acc2,"trump_IRA_troll_overlap_inc_retweets.xls")
+
+
+dfc$account_created_at=as_datetime(dfc$account_created_at)
+
+sdt=sdt %>% mutate(
+  class_label=case_when(modularity_class==19 ~ "cluster 1",
+                        modularity_class==13 ~ "cluster 2",
+                        modularity_class==12 ~ "cluster 3"
+    
+  ))
+sdt=sdt[,c(2,3,4,5)]
+
+red_df <-dfc %>% select(screen_name,account_created_at,followers_count) %>% distinct(.keep_all=T)
+rec_top_foll<-red_df %>% filter(account_created_at > "2016-02-17" & log(followers_count) >12)
+WriteXLS(rec_top_foll,"topfollowers_from2016.xls")
+ggplot(aes(account_created_at,log(followers_count)),data=dfc)+geom_point()
+
+```

@@ -1,0 +1,125 @@
+---
+title: "trump cluster comparisons"
+output: html_notebook
+Note: create network graph using retweet. embed six clustering algorithms
+Author: Thomas E. Keller
+---
+
+Following a recommendation from (insert name) that Loni received from a research workshop she attended, we will try several different clustering methods in igraph, as compared to the single clustering method available in gephi. Loni made a reference to a paper (link?) that found that the Girvan-Newman (2004) method implemented in Gephi was the most effective out of 4 compared. 
+
+What scale?
+
+```{r netprep}
+library(dplyr)
+library(igraph)
+library(readr)
+setwd('~/trump_rtweet')
+df=read_csv('rtweet_justfornetwork_051118.csv')
+
+df=filter(df,is_retweet==1)
+df=df[complete.cases(df),]
+df$status_id=as.character(df$status_id)
+df=distinct(df,status_id,.keep_all=TRUE)
+#remove donald trump account, it warps the network because everyone on the right follows it
+df=filter(df,screen_name!="realDonaldTrump" & retweet_screen_name!="realDonaldTrump")
+
+
+```
+
+# making the retweet network
+
+After filtering out non-retweet tweets, we make a dataframe of all retweets as from-to relationships, and add a weight column to them.
+
+Separately, we make labels out of the unique set of names in the edge list.
+
+deg_subset is a quantile cutoff function to take the top x% of accounts based on their degree distribution. So, if you give it deg_subset(0.001, graph) then it will return the top .001% of accounts according to the degree distribution.
+
+Finally, we try some different clustering methods so we can compare them to the default method in gephi (cluster_louvain in igraph).
+
+```{r network}
+# make the graph
+#filter to only count those posts that have actually been retweeted
+edges = data.frame(from=df$screen_name,to=df$retweet_screen_name,stringsAsFactors = F)  %>% group_by(from,to) %>% summarize(value = n())
+
+# Build a df for nodes
+nodes <- data.frame(id = unique(c(edges$from, edges$to)),
+                    label = unique(c(edges$from, edges$to)),
+                    stringsAsFactors = F) %>% tbl_df
+
+library(igraph)
+rt_graph <- make_empty_graph() + vertices(nodes$id) +
+  edges(as.vector(rbind(edges$from, edges$to)), weight = edges$value)
+
+
+#takes the cutoff as a fraction (usually .01-.001) equilivent to the 
+deg_subset<-function(cutoff,g){
+  rc=1-cutoff
+  dfv=data.frame(V=as.vector(V(g)),screen_name=V(g)$name,degree(g))
+  names(dfv)[3]="degree"
+  dfv=cbind(dfv,quantile=cut(dfv$degree,
+                             breaks=quantile(dfv$degree,probs=c(0,rc,1)),
+                             labels=c("Bottom99",'Top1'),include.lowest=T))
+  dfv$quantile=as.character(dfv$quantile)
+  dfv2=arrange(dfv,desc(quantile))
+  dfv3=dfv2[dfv2$quantile=='Top1',]
+  sg=induced_subgraph(g,dfv3$V)
+  res=list(g=sg,df=dfv3)
+  return(res)
+}
+
+#2619 total acccounts
+res=deg_subset(.001,rt_graph)
+res_df=res$df
+sub_g=res$g
+
+
+
+res_df=cbind(res_df,mod_blouv=m_b$membership,mod_label=m_l$membership)
+res_df=arrange(res_df,desc(degree))
+
+write_csv(res_df,"top_001p_trump051618_rtweet.csv")
+
+#not needed anymore (did at the top)
+#sub_g=delete_vertices(sub_g,"realDonaldTrump")
+
+sub_gc=as.undirected(sub_g, mode = "collapse") 
+
+m_e=cluster_leading_eigen(sub_gc) # wants undirected  (duh its an eigen method) still has problems?
+m_c=cluster_walktrap(sub_gc)
+m_b=cluster_louvain(sub_gc)
+m_l=cluster_label_prop(sub_gc)
+m_i=cluster_infomap(sub_gc)
+m_f=cluster_fast_greedy(sub_gc)
+#m_bt=cluster_edge_betweenness(sub_g) Don't run this one, it is EXTREMELY slow compared to other methods
+
+
+res_df=cbind(res_df,mod_blouv=m_b$membership,mod_label=m_l$membership)
+
+
+#normally we can just directly save the subgraph without
+#having to add these extra attributes
+#this was the first time I had to do this extra step
+#however, this is how and where you save these extra variables to send to gephi
+
+sub_gc2 = sub_gc %>% set_vertex_attr("mod_walktrap",value=m_c$membership) %>% 
+  set_vertex_attr("mod_blouvain",value=m_b$membership) %>%
+  set_vertex_attr("mod_label",value=m_l$membership) %>%
+  set_vertex_attr("mod_infomap",value=m_i$membership) %>%
+  set_vertex_attr("mod_eigen",value=m_e$membership) %>%
+  set_vertex_attr("mod_greedy",value=m_f$membership)
+  
+
+list.graph.attributes(sub_gc2)
+
+#final output for gephi
+library(rgexf)
+rg=igraph.to.gexf(sub_gc2)
+f=file("rtweet_6clusters_051118.gexf")
+writeLines(rg$graph, con = f)
+close(f)
+library(stringr)
+
+
+
+```
+

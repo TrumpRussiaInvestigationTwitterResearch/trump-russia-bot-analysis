@@ -1,0 +1,290 @@
+# Make db
+
+Initial script to make a frickin database all them tweets.
+```{r-}
+library(DBI)
+library(RSQLite)
+library(rtweet)
+library(purrr)
+setwd('~/trump_rtweet')
+fl=list.files('/media/tekeller/My Passport/trump_tweets',pattern='parsed_trump_[0-9]+.rds',full.names=T)
+ufl=list.files('/media/tekeller/My Passport/trump_tweets',pattern='parsed_trump_ud[0-9]+.rds',full.names=T)
+
+dump_dat<-function(fname,i,dbname){
+  print(paste0("dumping file ",i))
+  dat <- readr::read_rds(fname)
+  dat2 <- prep_for_csv(dat)
+  con <- dbConnect(RSQLite::SQLite(), dbname)
+  dbWriteTable(con,dbname,dat2,append=TRUE)
+  RSQLite::dbDisconnect(con)
+  rm(dat)
+  rm(dat2)
+  gc(verbose=FALSE)
+  
+}
+
+dcl<- unlist(sapply(dat2,class))
+ncl <- recode(dcl,character="character",numeric="numeric",logical="logical",integer="integer", )
+
+#use barbera criteria to filter by english acounts and have at least 25 followers and following 100 accounts
+filter_bots_old<-function(df){
+  df %>% dplyr::filter(account_lang=='en' & followers_count > 100 & friends_count > 25 )
+}
+
+dat3=filter_bots_old(dat)
+
+ser_ls<-function(ls){
+  ls <- ls %>% map(function(x) I(serialize(x,NULL)))
+}
+
+dat4=dat3 %>% modify_if(is.list,ser_ls)
+dat4$retweet_created_at=as.numeric(dat4$retweet_created_at)
+dat4$created_at=as.numeric(dat4$created_at)
+dat4$account_created_at=as.numeric(dat4$account_created_at)
+dat4$quoted_created_at=as.numeric(dat4$quoted_created_at)
+
+con<-dbConnect(RSQLite::SQLite(),"trump_rtweet2.sqlite")
+dbWriteTable(con,"trump_rtweet2.sqlite",dat4)
+
+hm=dbGetQuery(con,'SELECT * FROM "trump_rtweet2.sqlite"')
+
+dat3=map_if(~is.list(.x))
+ncl <-?db
+
+dump_dat2<-function(fname,i,dbname){
+  print(paste0("dumping file ",i))
+  dat <- readr::read_rds(fname)
+  con <- dbConnect(RSQLite::SQLite(), dbname)
+  dbWriteTable(con,dbname,dat,append=TRUE)
+  RSQLite::dbDisconnect(con)
+  rm(dat)
+  gc(verbose=FALSE)
+  
+}
+
+dump_dat3<-function(fname,i,dbname){
+  print(paste0("dumping file ",i))
+  
+  dat <- readr::read_rds(fname)
+  dat2=dat %>% modify_if(is.list,ser_ls)
+  dat2$retweet_created_at=as.numeric(dat2$retweet_created_at)
+  dat2$created_at=as.numeric(dat2$created_at)
+  dat2$account_created_at=as.numeric(dat2$account_created_at)
+  dat2$quoted_created_at=as.numeric(dat2$quoted_created_at)
+  
+  con <- dbConnect(RSQLite::SQLite(), dbname)
+  dbWriteTable(con,dbname,dat2,append=TRUE)
+  RSQLite::dbDisconnect(con)
+  rm(dat)
+  gc(verbose=FALSE)
+}
+
+library(dplyr)
+library(purrr)
+options(readr.num_columns = 0)
+fl[1:170] %>% 
+  map2(1:170,~dump_dat(.x,.y,"trump_rtweet.sqlite"))
+
+#fl[110:length(fl)] %>% 
+#  map2(110:length(fl),~dump_dat(.x,.y,"trump_rtweet.sqlite"))
+ufl %>% 
+  map2(1:170,~dump_dat2(.x,.y,"trump_user.sqlite"))
+
+fl[1:170] %>% 
+  map2(1:170,~dump_dat3(.x,.y,"trump_rtweet2.sqlite"))
+
+
+#ufl[81:170] %>% 
+#  map2(81:170,~dump_dat(.x,.y,"trump_user.sqlite"))
+
+purrr::map(fl, dump_dat)
+
+
+
+```
+
+# extract just subgraph tweets
+
+OK, so what we really want are the tweets and user data that matches the subgraph. So we can take the dataframe that has the user data from gephi (in attr and one other column) and do an match in where. The database is too large to fit into memory, so we need to feed ~50k samples at a time or something.
+
+```{r sqlite-tweet-extract}
+ #IMPORTANT 5-14 IGNORE this section (111-164)
+
+library(readr)
+library(dplyr)
+library(RSQLite)
+library(purrr)
+sgraph <-read_csv('trump_subgraph_1018.csv')
+dbname<-"trump_rtweet.sqlite"
+twdb <- dbConnect(RSQLite::SQLite(), dbname)
+
+#gots to escape the db like the example from
+# https://cran.r-project.org/web/packages/RSQLite/vignettes/RSQLite.html
+result <- vector("list", 500) 
+
+rs <- dbSendQuery(twdb, 'SELECT * FROM "trump_rtweet.sqlite"')
+i=1
+#While loop to process only a few records at a time so memory consumption 
+#is maneagable
+while (!dbHasCompleted(rs)) {
+  df <- dbFetch(rs, n = 50000)
+  sub_df=filter(df,screen_name %in% sgraph$label)
+  result[[i]]=sub_df
+  print(i)
+  i=i+1
+}
+giant_df=bind_rows(compact(result))
+
+write_csv(giant_df,"rtweet_subgraph1018.csv")
+
+
+
+dbname<-"trump_user.sqlite"
+twdb <- dbConnect(RSQLite::SQLite(), dbname)
+
+
+#gots to escape the db like the example from
+# https://cran.r-project.org/web/packages/RSQLite/vignettes/RSQLite.html
+result <- vector("list", 500) 
+
+rs <- dbSendQuery(twdb, 'SELECT * FROM "trump_user.sqlite"')
+i=1
+#While loop to process only a few records at a time so memory consumption 
+#is maneagable
+while (!dbHasCompleted(rs)) {
+  df <- dbFetch(rs, n = 50000)
+  sub_df=filter(df,screen_name %in% sgraph$label)
+  result[[i]]=sub_df
+  print(i)
+  i=i+1
+}
+giant_df=bind_rows(compact(result))
+
+write_csv(giant_df,"rtweet_user_subgraph1018.csv")
+
+```
+
+# new results 05-14
+
+We want to generate a new dataframe of rtweet, but it would take too much space and memory to output all of the potential variables, especially since we are starting from square one and not using a subset of the user accounts like the previous 2 searches that matched accounts against the network.
+
+The solution? We will output all user accounts, but only the 5 or so variables needed to created a network in igraph.
+
+```{r rtweet-net}
+
+dbname<-"trump_rtweet2.sqlite"
+twdb <- dbConnect(RSQLite::SQLite(), dbname)
+result <- vector("list", 500) 
+
+rs <- dbSendQuery(twdb, 'SELECT status_id,screen_name,retweet_screen_name,retweet_favorite_count,retweet_retweet_count,is_retweet FROM "trump_rtweet2.sqlite"')
+i=1
+#While loop to process only a few records at a time so memory consumption 
+#is maneagable
+while (!dbHasCompleted(rs)) {
+  df <- dbFetch(rs, n = 50000)
+  result[[i]]=df
+  print(i)
+  i=i+1
+}
+giant_df=bind_rows(compact(result))
+
+write_csv(giant_df,"rtweet_justfornetwork_051118.csv")
+
+
+
+
+
+library(readr)
+library(dplyr)
+library(RSQLite)
+library(purrr)
+sgraph <-read_csv('top_001p_trump051618_rtweet.csv')
+dbname<-"trump_rtweet2.sqlite"
+twdb <- dbConnect(RSQLite::SQLite(), dbname)
+
+#gots to escape the db like the example from
+# https://cran.r-project.org/web/packages/RSQLite/vignettes/RSQLite.html
+result <- vector("list", 500) 
+
+rs <- dbSendQuery(twdb, 'SELECT * FROM "trump_rtweet2.sqlite"')
+i=1
+#While loop to process only a few records at a time so memory consumption 
+#is maneagable
+while (!dbHasCompleted(rs)) {
+  df <- dbFetch(rs, n = 50000)
+  sub_df=filter(df,screen_name %in% sgraph$screen_name)
+  result[[i]]=sub_df
+  print(i)
+  i=i+1
+}
+giant_df=bind_rows(compact(result))
+
+unser<-function(df){df %>% modify_if(is_list,function(x) map(x,unserialize ))}
+giant_df <- unser(giant_df)
+
+
+
+welp=map(giant_df$hashtags, unserialize)
+
+write_rds(giant_df,"rtweet_finalish_051618.csv")
+
+write_csv(giant_df,"rtweet_subgraph051618.csv")
+```
+
+# convert to rtweet rds files and save
+The saved csv files will have the various fields that can have multiple entries (links, mentions, etc) as comma separated entries, use the rtweet read_twitter_csv function to convert to tibble that will have list columns instead for those fields.
+
+```{r-convert-csv}
+library(rtweet)
+df=read_rds("rtweet_finalish_051618.rds")
+dfn=read_csv('retweet_trump_top_001p_051718_loni.csv')
+dfn= dfn %>%
+  filter(modularity_class %in% c(19,13,12)) %>%
+  mutate(
+  class_label=case_when(modularity_class==19 ~ "cluster 1",
+                        modularity_class==13 ~ "cluster 2",
+                        modularity_class==12 ~ "cluster 3"
+    
+  )
+)
+
+#clusters 82,60,31 (blouvain)
+#clusters 4,2,3 (mod_label)
+
+
+dfn2 = dfn %>% 
+  select(Label,Degree,Eccentricity:eigencentrality)
+
+df=distinct(df,status_id,.keep_all=TRUE)
+dfc=inner_join(df,dfn2,by=c("screen_name"="Label"))
+sentout=data.frame(x=ifelse(dfc$is_retweet,dfc$retweet_text,dfc$text))
+library(stringr)
+sentout=str_replace_all(sentout$x,"[\n\r]"," ")
+#write.csv(sentout,"senti_input.csv",row.names=F,quote=T)
+
+```
+
+# Sentiment tagging
+
+Running the sentiment scorer is fickle, basically the easiest way to do it I found was to create a single column csv with just the text, manually delete the "x" column title with nano, move the file to a sub directory (I named mine sentiment). Then, you can run the sentiment analyzer with java if you have the Sentistrength files in your folder.
+
+sentiment tagging 
+java -jar SentiStrengthCom.jar sentidata ./SentiStrength_DataEnglishFeb2017/ annotateCol 1 inputFolder ./sentiment fileSubstring csv overwrite
+
+```{r}
+
+dfc$created_at=as_datetime(dfc$created_at)
+account_created_at=as_datetime(dfc$account_created_at)
+
+
+#OLD PROCESSING STUFF
+df$retweet_verified=as.integer(df$retweet_verified)
+df$retweet_statuses_count=as.integer(df$retweet_statuses_count)
+df$followers_count=as.integer(df$followers_count)
+df$retweet_favorite_count=as.integer(df$retweet_favorite_count)
+df$retweet_retweeted_count=as.integer(df$retweet_retweeted_count)
+readr::write_csv(dfc,"rtweet_041718.csv")
+df=read_twitter_csv("rtweet_user_subgraph1018.csv")
+readr::write_rds(df,"rtweet_user_subgraph1018.rds")
+
+```
